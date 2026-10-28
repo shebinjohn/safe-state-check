@@ -50,11 +50,11 @@ you trusted your own RPC without a cross-check.
 
 ## Reading the result
 
-| Banner                          | Meaning                                                                                                                                                   |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Storage fully explained (green) | Every slot in the proven storage is explained: by the configuration, or as an approved hash or signed message that its event announces.                   |
-| Unexplained storage (red)       | The proven root does not match, or a slot holds something that is not benign. Red only on verified data.                                                  |
-| Could not verify (amber)        | Something the result rests on could not be read, proven or confirmed. The banner lists why. Amber says this run cannot tell, not that the Safe is unsafe. |
+| Banner                          | Meaning                                                                                                                                                    |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Storage fully explained (green) | Every slot in the proven storage is explained: by the configuration, or as an approved hash or signed message that its event announces.                    |
+| Unexplained storage (red)       | The proven root does not match, or a slot holds something that is not benign. Red only on verified data.                                                   |
+| Could not verify (orange)       | Something the result rests on could not be read, proven or confirmed. The banner lists why. Orange says this run cannot tell, not that the Safe is unsafe. |
 
 Green and red are about storage. The banner also shows the number of findings by severity (Critical, High, Medium,
 Info). A green banner can sit above a Critical finding: a module that is a plain account has all its slots explained,
@@ -237,6 +237,11 @@ npm run check      # eslint, prettier --check, tsc
 npm test           # unit tests (vitest)
 npm run build      # type check and production build into dist/
 ```
+
+The look follows the Safe Design System's dark theme: the color tokens are in `src/index.css`, and DM Sans and Geist
+Mono (SIL Open Font License) are served from `src/assets/fonts/`. The mark, favicons, app icons and social preview
+are in `brand/`: the SVGs are the sources, and `npm run brand:export` renders the PNG and ICO files from them and
+copies the served ones into `public/`.
 
 More tests:
 

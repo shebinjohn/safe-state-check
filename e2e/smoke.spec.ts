@@ -72,7 +72,7 @@ for (const stream of STREAMS) {
   })
 }
 
-test("works at 400 px in the current color scheme", async ({ page }, info) => {
+test("works at 400 px in either color scheme", async ({ page }) => {
   const watched = await watch(page)
   await page.goto(`/e2e/fixture.html?speed=4#/1/${RED}`)
   await expect(verdict(page, "Unexplained storage")).toBeVisible({ timeout: 20_000 })
@@ -82,9 +82,9 @@ test("works at 400 px in the current color scheme", async ({ page }, info) => {
   const storage = page.getByRole("region", { name: "Storage slots" })
   expect(await storage.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true)
 
+  // The site is dark in both color schemes.
   const background = await page.evaluate(() => getComputedStyle(document.body).backgroundColor)
-  if (info.project.name === "dark") expect(background).not.toBe("rgb(255, 255, 255)")
-  else expect(background).toBe("rgb(255, 255, 255)")
+  expect(background).toBe("rgb(0, 0, 0)")
 
   const { shifts, csp } = await watched.read()
   expect(shifts).toEqual([])
@@ -215,6 +215,12 @@ test("the chain picker keeps the active option in view", async ({ page }) => {
 test("the whole check works from the keyboard", async ({ page }) => {
   await page.goto("/e2e/fixture.html?speed=4")
 
+  // The header's two links come first, then the form.
+  await page.keyboard.press("Tab")
+  const header = page.getByRole("banner")
+  await expect(header.getByRole("link", { name: "Safe State Check" })).toBeFocused()
+  await page.keyboard.press("Tab")
+  await expect(header.getByRole("link", { name: "Source on GitHub" })).toBeFocused()
   await page.keyboard.press("Tab")
   await expect(page.getByLabel("Safe address")).toBeFocused()
   await page.keyboard.type(RED)

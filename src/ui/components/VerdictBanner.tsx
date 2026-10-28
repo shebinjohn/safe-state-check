@@ -6,16 +6,28 @@ import {
   ownRpcLine,
   utcTime,
   PARTIAL_LABEL,
+  SEVERITY_LABEL,
   VERDICT_LABEL,
   visibleIssues,
 } from "@/core/markdown"
-import type { Report, StepRecord, StopReason, Tone, UnverifiedReason, VerdictKind } from "@/core/report"
-import { Spinner } from "@/ui/components/common"
-import { shorten, STEP_STATUS_LABEL, TONE_CLASSES } from "@/ui/format"
+import type { Report, Severity, StepRecord, StopReason, UnverifiedReason, VerdictKind } from "@/core/report"
+import { BUTTON, BUTTON_ON_TONE } from "@/ui/components/common"
+import { shorten, STEP_STATUS_LABEL } from "@/ui/format"
 import { STEP_LABELS, STEP_ORDER } from "@/core/steps"
 import type { LiveRun } from "@/ui/run"
 
-const VERDICT_TONE: Record<VerdictKind, Tone> = { explained: "ok", unexplained: "bad", unverified: "warn" }
+type BannerTone = "progress" | "ok" | "bad" | "warn"
+
+const VERDICT_TONE: Record<VerdictKind, BannerTone> = { explained: "ok", unexplained: "bad", unverified: "warn" }
+
+// The frame lines (border-*), the panel (bg-*), and the title and corner markers (text-*). They come last in the
+// box's classes: the box stays the same while the run streams, and only its tone changes at the end.
+const BANNER_TONE: Record<BannerTone, string> = {
+  progress: "border-border bg-surface text-muted-foreground",
+  ok: "border-brand-deep bg-brand-tint text-brand",
+  bad: "border-bad bg-bad-surface text-bad",
+  warn: "border-warn bg-warn-surface text-warn",
+}
 
 // Unverified reasons that the user's own RPC can fix.
 const RPC_REASONS = new Set<UnverifiedReason>([
@@ -30,10 +42,23 @@ const RPC_REASONS = new Set<UnverifiedReason>([
 
 // One box for the whole run: progress while it streams, then the verdict or why it stopped. Its height is fixed in
 // every state, so nothing below it moves when the state changes; the reasons scroll inside it when they do not fit.
-const BOX = "grid h-[28rem] grid-cols-1 grid-rows-[auto_1fr_auto] gap-2 overflow-hidden rounded-lg border-2 p-4 sm:h-80"
+// From sm up, the findings take a column of their own on the right.
+const BOX =
+  "relative grid h-[28rem] grid-cols-1 grid-rows-[auto_minmax(0,1fr)_auto_auto] gap-3 p-5 sm:h-[22rem] sm:grid-cols-[minmax(0,1fr)_14rem] sm:grid-rows-[auto_minmax(0,1fr)_auto] sm:gap-x-10 sm:px-8 sm:py-7"
 
-const BUTTON =
-  "rounded border border-current px-2 py-1 text-sm hover:bg-subtle focus-visible:outline-2 focus-visible:outline-focus"
+const NOTICE = "rounded-sm border border-warn-border bg-warn-surface px-2 py-0.5 text-sm text-warn"
+
+// Rules inside a tinted panel: the panel's own tone, lightened.
+const RULE = "border-foreground/20"
+
+const SEVERITIES: readonly Severity[] = ["critical", "high", "medium", "info"]
+
+const SEVERITY_SQUARE: Record<Severity, string> = {
+  critical: "bg-bad outline-[1.5px] outline-offset-[1.5px] outline-bad outline-solid",
+  high: "bg-bad",
+  medium: "bg-warn",
+  info: "bg-info",
+}
 
 export type BannerActions = {
   onStop: () => void
@@ -63,6 +88,27 @@ export function VerdictBanner({
   if (partial) return <Verdict report={partial} notes={notes} partial actions={actions} />
   if (run.status === "stopped") return <Stopped run={run} actions={actions} />
   return <Progress run={run} actions={actions} />
+}
+
+// The frame of the design system's slides: lines that run past the corners, a square on each crossing. Lines take the
+// box's border color and the squares its text color, so the tone colors both. Decoration only, out of the grid.
+function Frame() {
+  const line = "absolute [border-color:inherit]"
+  const across = `${line} -inset-x-2.5 sm:-inset-x-[18px]`
+  const down = `${line} -inset-y-2.5 sm:-inset-y-[18px]`
+  const square = "absolute size-2.5 bg-current sm:size-3.5"
+  return (
+    <span aria-hidden="true" className="pointer-events-none absolute inset-0 [border-color:inherit]">
+      <span className={`${across} top-0 border-t-2`} />
+      <span className={`${across} bottom-0 border-b-2`} />
+      <span className={`${down} left-0 border-l-2`} />
+      <span className={`${down} right-0 border-r-2`} />
+      <span className={`${square} -top-1 -left-1 sm:-top-1.5 sm:-left-1.5`} />
+      <span className={`${square} -top-1 -right-1 sm:-top-1.5 sm:-right-1.5`} />
+      <span className={`${square} -bottom-1 -left-1 sm:-bottom-1.5 sm:-left-1.5`} />
+      <span className={`${square} -right-1 -bottom-1 sm:-right-1.5 sm:-bottom-1.5`} />
+    </span>
+  )
 }
 
 // Whether the list has content below what is shown, so the box can say so instead of cutting it off unnoticed.
@@ -97,83 +143,115 @@ function Verdict({
   actions: BannerActions
 }) {
   const { verdict, verification } = report
-  const counts = (["critical", "high", "medium", "info"] as const).map((s) => `${verdict.counts[s]} ${s}`).join(" · ")
   const total = report.findings.length
   const rpcReason = verdict.unverified.some((u) => RPC_REASONS.has(u.reason))
   const past = isPastState(report)
   const trust = verification.agreement === "self-trusted" ? AGREEMENT_LABEL["self-trusted"] : ownRpcLine(verification)
   const [list, setList] = useState<HTMLUListElement | null>(null)
   const reasons = useOverflow(list)
+  const label = partial ? PARTIAL_LABEL : VERDICT_LABEL[verdict.kind]
+  // "Could not verify: only one RPC operator…" under the title "Could not verify" says it twice.
+  const headline = verdict.headline.startsWith(`${label}: `)
+    ? verdict.headline.slice(label.length + 2).replace(/^./, (c) => c.toUpperCase())
+    : verdict.headline
   return (
     <section
       aria-labelledby={VERDICT_HEADING_ID}
-      className={`${BOX} ${TONE_CLASSES[partial ? "warn" : VERDICT_TONE[verdict.kind]]}`}
+      className={`${BOX} ${BANNER_TONE[partial ? "warn" : VERDICT_TONE[verdict.kind]]}`}
     >
-      <div className="flex flex-col gap-1">
-        <h2 id={VERDICT_HEADING_ID} tabIndex={-1} className="text-xl font-bold focus:outline-none">
-          {partial ? PARTIAL_LABEL : VERDICT_LABEL[verdict.kind]}
+      <Frame />
+      <div className="flex min-w-0 flex-col gap-1.5 sm:col-start-1 sm:row-start-1">
+        <h2
+          id={VERDICT_HEADING_ID}
+          tabIndex={-1}
+          className="text-[28px] leading-[34px] font-semibold focus:outline-none sm:text-[34px] sm:leading-10"
+        >
+          {label}
         </h2>
-        <p className="text-foreground">{verdict.headline}</p>
-        <p className="text-sm text-foreground">
+        <p className="text-base text-foreground sm:text-lg">{headline}</p>
+        <p className="text-sm text-muted-foreground">
           Block {verification.anchor.number}, {utcTime(verification.anchor.timestamp)}
         </p>
         {past && (
-          <p className="rounded border border-warn-border bg-warn-surface px-2 py-0.5 text-sm text-warn">
-            This is the state at block {verification.anchor.number}, not the current state.
-          </p>
+          <p className={NOTICE}>This is the state at block {verification.anchor.number}, not the current state.</p>
         )}
-        {trust && (
-          <p className="rounded border border-warn-border bg-warn-surface px-2 py-0.5 text-sm text-warn">{trust}</p>
-        )}
+        {trust && <p className={NOTICE}>{trust}</p>}
       </div>
-      <div className="relative min-h-0">
+      <div className="relative min-h-0 sm:col-start-1 sm:row-start-2">
         <ul
           ref={setList}
           aria-label="Reasons"
           tabIndex={reasons.overflows ? 0 : undefined}
-          className="h-full list-disc overflow-y-auto pl-5 text-sm text-foreground focus-visible:outline-2 focus-visible:outline-focus"
+          className="h-full overflow-y-auto text-sm text-foreground sm:text-[15px] sm:leading-[22px]"
         >
           {[...notes, ...verdict.reasons.slice(0, 3)].map((reason) => (
-            <li key={reason}>{reason}</li>
+            <li
+              key={reason}
+              className={`relative border-t py-2 pl-5 ${RULE} before:absolute before:left-0 before:content-['-'] last:border-b`}
+            >
+              {reason}
+            </li>
           ))}
         </ul>
         {reasons.more && (
-          <p className="pointer-events-none absolute right-0 bottom-0 rounded bg-surface px-1 text-xs text-foreground">
+          <p className="pointer-events-none absolute right-0 bottom-0 bg-background px-1.5 text-xs text-foreground">
             More below; scroll the list.
           </p>
         )}
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm">Findings: {counts}</p>
-        <div className="flex flex-wrap gap-2">
+      <div className={`flex flex-col gap-3 sm:col-start-2 sm:row-span-3 sm:row-start-1 sm:border-l sm:pl-8 ${RULE}`}>
+        <p className="hidden text-sm font-semibold text-foreground sm:block">Findings</p>
+        <ul
+          aria-label="Findings by severity"
+          className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-1 sm:gap-y-2.5 sm:text-[15px]"
+        >
+          {SEVERITIES.map((severity) => {
+            const count = verdict.counts[severity]
+            return (
+              <li
+                key={severity}
+                className={`flex items-center gap-2.5 ${count > 0 ? "font-semibold text-foreground" : "text-muted-foreground"}`}
+              >
+                <span
+                  aria-hidden="true"
+                  className={`size-2.5 shrink-0 ${count > 0 ? SEVERITY_SQUARE[severity] : "border-[1.5px] border-muted-foreground"}`}
+                />
+                <span>{SEVERITY_LABEL[severity]}</span> <span className="ml-auto tabular-nums">{count}</span>
+              </li>
+            )
+          })}
+        </ul>
+        {total > 0 && (
+          <button
+            type="button"
+            className={`${BUTTON_ON_TONE} w-full sm:mt-auto`}
+            aria-expanded={actions.findingsOpen}
+            aria-controls="all-findings"
+            onClick={actions.onToggleFindings}
+          >
+            {actions.findingsOpen ? "Hide findings" : `Show all ${total} findings`}
+          </button>
+        )}
+      </div>
+      {(partial || past || rpcReason) && (
+        <div className="flex flex-wrap gap-2 sm:col-start-1 sm:row-start-3">
           {partial && (
-            <button type="button" className={BUTTON} onClick={actions.onRetry}>
+            <button type="button" className={BUTTON_ON_TONE} onClick={actions.onRetry}>
               Try again
             </button>
           )}
           {past && (
-            <button type="button" className={BUTTON} onClick={actions.onLatestBlock}>
+            <button type="button" className={BUTTON_ON_TONE} onClick={actions.onLatestBlock}>
               Check the latest block
             </button>
           )}
           {rpcReason && (
-            <button type="button" className={BUTTON} onClick={actions.onOpenSettings}>
+            <button type="button" className={BUTTON_ON_TONE} onClick={actions.onOpenSettings}>
               RPC settings
             </button>
           )}
-          {total > 0 && (
-            <button
-              type="button"
-              className={BUTTON}
-              aria-expanded={actions.findingsOpen}
-              aria-controls="all-findings"
-              onClick={actions.onToggleFindings}
-            >
-              {actions.findingsOpen ? "Hide findings" : `Show all ${total} findings`}
-            </button>
-          )}
         </div>
-      </div>
+      )}
     </section>
   )
 }
@@ -193,27 +271,29 @@ const STOP_HEADING: Record<StopReason | "crashed", string> = {
 function Stopped({ run, actions }: { run: LiveRun; actions: BannerActions }) {
   const reason = run.stop?.reason
   return (
-    <section aria-labelledby={VERDICT_HEADING_ID} className={`${BOX} ${TONE_CLASSES.warn}`}>
-      <h2 id={VERDICT_HEADING_ID} tabIndex={-1} className="text-xl font-bold focus:outline-none">
+    <section aria-labelledby={VERDICT_HEADING_ID} className={`${BOX} ${BANNER_TONE.warn}`}>
+      <Frame />
+      <h2
+        id={VERDICT_HEADING_ID}
+        tabIndex={-1}
+        className="text-[28px] leading-[34px] font-semibold focus:outline-none sm:col-span-2 sm:text-[34px] sm:leading-10"
+      >
         {reason ? STOP_HEADING[reason] : "The check could not run"}
       </h2>
-      <p
-        tabIndex={0}
-        className="min-h-0 overflow-y-auto text-foreground wrap-anywhere focus-visible:outline-2 focus-visible:outline-focus"
-      >
+      <p tabIndex={0} className="min-h-0 overflow-y-auto text-foreground wrap-anywhere sm:col-span-2 sm:text-lg">
         {run.stop?.message}
       </p>
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-3 sm:col-span-2">
+        <p className="text-sm text-foreground">
           {visibleIssues(run.issues).length > 0 ? "The problems are listed below." : "Nothing was checked."}
         </p>
         <div className="flex gap-2">
           {(reason === "no-rpc" || reason === "anchor-failed") && (
-            <button type="button" className={BUTTON} onClick={actions.onOpenSettings}>
+            <button type="button" className={BUTTON_ON_TONE} onClick={actions.onOpenSettings}>
               RPC settings
             </button>
           )}
-          <button type="button" className={BUTTON} onClick={actions.onRetry}>
+          <button type="button" className={BUTTON_ON_TONE} onClick={actions.onRetry}>
             Try again
           </button>
         </div>
@@ -230,14 +310,46 @@ function stepFor(run: LiveRun, id: StepRecord["id"], label: string): StepRecord 
   return { id, label, status, note: run.status === "starting" ? null : "Not needed", startedAt: null, finishedAt: null }
 }
 
+// A small block per step that fills in as the run goes: done in green with a check, gaps in orange with "!", failed in
+// red with "✕". Shape and glyph carry the state, not only the color.
 function StepIcon({ status }: { status: StepRecord["status"] }) {
-  if (status === "running") return <Spinner />
-  const glyph = { pending: "○", done: "✓", degraded: "!", skipped: "–", failed: "✕" }[status]
-  return (
-    <span aria-hidden="true" className="inline-flex size-3.5 shrink-0 items-center justify-center text-xs font-bold">
-      {glyph}
-    </span>
-  )
+  const cell = "inline-flex size-3.5 shrink-0 items-center justify-center text-[10px] leading-none font-semibold"
+  switch (status) {
+    case "running":
+      return (
+        <span aria-hidden="true" className={`${cell} border-[1.5px] border-foreground`}>
+          <span className="size-1.5 bg-foreground motion-safe:animate-blink" />
+        </span>
+      )
+    case "done":
+      return (
+        <span aria-hidden="true" className={`${cell} bg-brand`}>
+          <svg viewBox="0 0 9 7" className="h-[7px] w-[9px] fill-none stroke-primary-foreground">
+            <path d="M1 3.5L3.5 6L8 1" strokeWidth="1.6" />
+          </svg>
+        </span>
+      )
+    case "degraded":
+      return (
+        <span aria-hidden="true" className={`${cell} bg-warn text-primary-foreground`}>
+          !
+        </span>
+      )
+    case "failed":
+      return (
+        <span aria-hidden="true" className={`${cell} bg-bad text-primary-foreground`}>
+          ✕
+        </span>
+      )
+    case "skipped":
+      return (
+        <span aria-hidden="true" className={`${cell} border border-border text-muted-foreground`}>
+          –
+        </span>
+      )
+    case "pending":
+      return <span aria-hidden="true" className={`${cell} border-[1.5px] border-border`} />
+  }
 }
 
 function Progress({ run, actions }: { run: LiveRun; actions: BannerActions }) {
@@ -246,16 +358,14 @@ function Progress({ run, actions }: { run: LiveRun; actions: BannerActions }) {
   const issues = visibleIssues(run.issues)
   const latest = issues.at(-1)
   return (
-    <section aria-labelledby={VERDICT_HEADING_ID} aria-busy="true" className={`${BOX} ${TONE_CLASSES.neutral}`}>
-      <div className="flex items-start justify-between gap-2">
+    <section aria-labelledby={VERDICT_HEADING_ID} aria-busy="true" className={`${BOX} ${BANNER_TONE.progress}`}>
+      <Frame />
+      <div className="flex items-start justify-between gap-3 sm:col-span-2">
         <div className="min-w-0">
-          <h2 id={VERDICT_HEADING_ID} className="flex items-center gap-2 text-lg font-semibold">
-            <Spinner />
-            <span className="truncate">
-              Checking {shorten(run.request.address)}
-              {run.chain ? ` on ${run.chain.name}` : ""}
-              {run.request.block ? ` at block ${run.request.block}` : ""}
-            </span>
+          <h2 id={VERDICT_HEADING_ID} className="truncate text-xl font-semibold text-foreground sm:text-2xl">
+            Checking {shorten(run.request.address)}
+            {run.chain ? ` on ${run.chain.name}` : ""}
+            {run.request.block ? ` at block ${run.request.block}` : ""}
           </h2>
           <p className="truncate text-sm text-muted-foreground">
             {/* Fixed-width digits: the text after the count must not move when it gains a digit. */}
@@ -267,20 +377,23 @@ function Progress({ run, actions }: { run: LiveRun; actions: BannerActions }) {
           Stop
         </button>
       </div>
-      <ol aria-label="Steps" className="grid min-h-0 grid-cols-2 content-start gap-x-3 gap-y-1 text-sm sm:grid-cols-3">
+      <ol
+        aria-label="Steps"
+        className="grid min-h-0 grid-cols-2 content-start gap-x-4 gap-y-0.5 text-[13px] sm:col-span-2 sm:grid-cols-3 sm:gap-x-6 sm:text-sm"
+      >
         {steps.map((step) => {
           const count = issues.filter((issue) => issue.step === step.id).length
           return (
             <li
               key={step.id}
-              className={`flex h-6 min-w-0 items-center gap-1.5 ${step.status === "pending" ? "text-muted-foreground" : ""}`}
+              className={`flex h-7 min-w-0 items-center gap-2.5 ${step.status === "pending" ? "text-muted-foreground" : "text-foreground"}`}
               title={[step.label, STEP_STATUS_LABEL[step.status], step.note].filter(Boolean).join(": ")}
             >
               <StepIcon status={step.status} />
               <span className="truncate">{step.label}</span>
               <span className="sr-only">, {STEP_STATUS_LABEL[step.status]}</span>
               {count > 0 && (
-                <span className="ml-auto shrink-0 rounded bg-warn-surface px-1 text-xs text-warn tabular-nums">
+                <span className="ml-auto shrink-0 rounded-sm bg-warn-surface px-1 text-xs text-warn tabular-nums">
                   {count}
                   <span className="sr-only"> problems</span>
                 </span>
@@ -289,7 +402,7 @@ function Progress({ run, actions }: { run: LiveRun; actions: BannerActions }) {
           )
         })}
       </ol>
-      <p className="line-clamp-2 h-10 text-sm text-warn" aria-live="polite">
+      <p className="line-clamp-2 h-10 text-sm text-warn sm:col-span-2" aria-live="polite">
         {latest ? `${issueHeadline(latest)}.${latest.recovered ? " Worked around." : ""}` : ""}
       </p>
     </section>

@@ -747,6 +747,5 @@ Not in this design, kept for later PRs:
 - A third Ethereum provider for the cross-check after Blast shuts down (header-only PublicNode covers it for now).
 - Reading ExtensibleFallbackHandler's per-Safe configuration instead of only naming it.
 - A known-guards source beyond Zodiac (the Safe{Wallet} guard list, if one is published).
-- `vite preview` serving `public/_headers`, a favicon, `.npmrc` with `save-exact=true`, immutable caching for
-  `/assets/*`, `.claude/` in `.gitignore`.
+- `vite preview` serving `public/_headers`, `.npmrc` with `save-exact=true`, `.claude/` in `.gitignore`.
 - Whether the CLI becomes a published package (default no).
